@@ -80,63 +80,84 @@ def _fix_tool_call_gaps(messages):
     """Ensure every assistant tool_call has a corresponding tool response message.
 
     Kimi strictly validates that each tool_call_id in an assistant message
-    must be followed by a tool message, with no other messages in between.
-    If a tool_call has no response, insert a placeholder.
-    Also reorders messages so tool responses immediately follow their assistant.
+    must be followed by a tool message, with no other messages in between,
+    and that every tool message corresponds to a preceding tool_call.
     """
-    # First pass: collect all tool messages and associate them with their
-    # preceding assistant message by tool_call_id matching.
-    # Then rebuild the message list with tool msgs immediately after each assistant.
-    result = []
-    i = 0
-    while i < len(messages):
-        msg = messages[i]
+    # Pass 1: drop orphan tool messages and dedupe duplicate tool responses.
+    # - Orphan: tool_call_id has no matching assistant tool_call anywhere earlier.
+    # - Duplicate: a second `tool` message for a tool_call_id we've already
+    #   kept. Codex re-sends each tool result a second time after the assistant
+    #   text turn that follows it, which strands the duplicate after a plain
+    #   assistant message and trips Kimi's validation
+    #   ("messages with role 'tool' must be a response to a preceding message
+    #   with 'tool_calls'").
+    valid_call_ids = set()
+    seen_tool_responses = set()
+    cleaned = []
+    for msg in messages:
         if msg.get("role") == "assistant" and msg.get("tool_calls"):
-            call_ids = [tc["id"] for tc in msg["tool_calls"]]
-            call_ids_set = set(call_ids)
+            for tc in msg["tool_calls"]:
+                cid = tc.get("id")
+                if cid:
+                    valid_call_ids.add(cid)
+            cleaned.append(msg)
+        elif msg.get("role") == "tool":
+            tcid = msg.get("tool_call_id")
+            if tcid not in valid_call_ids:
+                log.warning(
+                    f"_fix_tool_call_gaps: dropping orphan tool message "
+                    f"(tool_call_id={tcid!r}, no preceding assistant tool_call)"
+                )
+            elif tcid in seen_tool_responses:
+                log.warning(
+                    f"_fix_tool_call_gaps: dropping duplicate tool message "
+                    f"(tool_call_id={tcid!r}, already responded to earlier)"
+                )
+            else:
+                cleaned.append(msg)
+                seen_tool_responses.add(tcid)
+        else:
+            cleaned.append(msg)
+    messages = cleaned
 
-            # Collect this assistant and all following non-assistant messages
-            # until we hit the next assistant or end of list
-            result.append(msg)
-            i += 1
+    # Pass 2: place each tool message immediately after its matching assistant
+    # tool_call. We can't just walk linearly and break on the next assistant,
+    # because Codex can interleave a plain assistant text message between the
+    # tool_call and its tool response (same logical turn). Instead, index all
+    # tool messages by tool_call_id and emit them right after their owning
+    # assistant. After Pass 1 each id has at most one tool message.
+    tools_by_id = {}
+    non_tool_msgs = []
+    for msg in messages:
+        if msg.get("role") == "tool":
+            tcid = msg.get("tool_call_id")
+            if tcid is not None:
+                tools_by_id[tcid] = msg
+        else:
+            non_tool_msgs.append(msg)
 
-            # Gather tool messages that belong to this assistant,
-            # plus any other messages that appear between assistant and its tools
-            other_msgs = []
-            tool_msgs = []
-            while i < len(messages):
-                nxt = messages[i]
-                if nxt.get("role") == "assistant":
-                    break
-                if nxt.get("role") == "tool" and nxt.get("tool_call_id") in call_ids_set:
-                    tool_msgs.append(nxt)
-                    call_ids_set.discard(nxt.get("tool_call_id"))
+    result = []
+    placed = set()
+    for msg in non_tool_msgs:
+        result.append(msg)
+        if msg.get("role") == "assistant" and msg.get("tool_calls"):
+            for tc in msg["tool_calls"]:
+                cid = tc.get("id")
+                if cid is None or cid in placed:
+                    continue
+                placed.add(cid)
+                if cid in tools_by_id:
+                    result.append(tools_by_id[cid])
                 else:
-                    other_msgs.append(nxt)
-                i += 1
-
-            # Insert any missing tool placeholders
-            for cid in call_ids:
-                found = False
-                for tm in tool_msgs:
-                    if tm.get("tool_call_id") == cid:
-                        found = True
-                        break
-                if not found:
-                    log.info(f"_fix_tool_call_gaps: inserting placeholder for missing tool_call_id: {cid}")
-                    tool_msgs.append({
+                    log.info(
+                        f"_fix_tool_call_gaps: inserting placeholder for "
+                        f"missing tool_call_id: {cid}"
+                    )
+                    result.append({
                         "role": "tool",
                         "tool_call_id": cid,
                         "content": "<no output>"
                     })
-
-            # Append tool messages immediately after assistant
-            result.extend(tool_msgs)
-            # Then append the other messages (system, user) that were in between
-            result.extend(other_msgs)
-        else:
-            result.append(msg)
-            i += 1
 
     return result
 
@@ -453,6 +474,23 @@ def _extract_event_type(sse_bytes: bytes) -> str:
     return "unknown"
 
 
+def _message_summary(messages: list) -> str:
+    """One-line role/tool_call_id summary of a chat-completions messages array,
+    for log scanning when full bodies are truncated.
+    """
+    parts = []
+    for m in messages:
+        role = m.get("role", "?")
+        if role == "assistant" and m.get("tool_calls"):
+            ids = ",".join(tc.get("id", "?") for tc in m["tool_calls"])
+            parts.append(f"[asst tools={ids}]")
+        elif role == "tool":
+            parts.append(f"[tool {m.get('tool_call_id', '?')}]")
+        else:
+            parts.append(f"[{role}]")
+    return " ".join(parts)
+
+
 class ThreadingHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
     """Thread-per-request HTTP server."""
     daemon_threads = True
@@ -501,6 +539,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             is_stream = body.get("stream", False)
 
             log.info(f"Stream mode: {is_stream}")
+            log.info(f"Message structure: {_message_summary(chat_body.get('messages', []))}")
             log.info(f"Converted chat_body: {json.dumps(chat_body, ensure_ascii=False, indent=2)[:2000]}")
 
             # Forward to backend
