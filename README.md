@@ -23,43 +23,25 @@ Supported providers: **GLM (智谱 AI)** and **Kimi (月之暗面)**.
 
 ## 🔄 Architecture
 
-```
-┌─────────────────┐
-│   Codex CLI     │  Sends: Responses API Request
-│   (User Side)   │  Receives: Responses API Response
-└────────┬────────┘
-         │ Responses API Format
-         ▼
-┌─────────────────────────────────────────┐
-│   Codex LLM Proxy (localhost:18765)    │
-│                                          │
-│  ┌────────────────────────────────────┐ │
-│  │  Request Converter                 │ │
-│  │  - Responses API → Chat Completions│ │
-│  │  - Tool call history handling      │ │
-│  │  - Model name mapping              │ │
-│  └────────────────────────────────────┘ │
-│                                          │
-│  ┌────────────────────────────────────┐ │
-│  │  Response Converter                │ │
-│  │  - Chat Completions → Responses API│ │
-│  │  - Tool call streaming             │ │
-│  │  - Event sequencing                │ │
-│  └────────────────────────────────────┘ │
-└──────────────────┬──────────────────────┘
-                   │
-         ┌─────────┴─────────┐
-         │  Backend Selector │
-         │  (glm / kimi)     │
-         └─────────┬─────────┘
-                   │
-     ┌─────────────┴─────────────┐
-     │                           │
-     ▼                           ▼
-┌──────────┐            ┌──────────────┐
-│ GLM API  │            │  Kimi API    │
-│ (智谱AI) │            │ (月之暗面)   │
-└──────────┘            └──────────────┘
+```mermaid
+flowchart TD
+    CLI["Codex CLI<br/>(User Side)"]
+
+    subgraph Proxy["Codex LLM Proxy (localhost:18765)"]
+        direction TB
+        RC["Request Converter<br/>- Responses API → Chat Completions<br/>- Tool call history handling<br/>- Model name mapping"]
+        RespC["Response Converter<br/>- Chat Completions → Responses API<br/>- Tool call streaming<br/>- Event sequencing"]
+    end
+
+    Selector["Backend Selector<br/>(glm / kimi)"]
+    GLM["GLM API<br/>(智谱 AI)"]
+    Kimi["Kimi API<br/>(月之暗面)"]
+
+    CLI -- "Responses API Request" --> Proxy
+    Proxy -- "Responses API Response" --> CLI
+    Proxy --> Selector
+    Selector --> GLM
+    Selector --> Kimi
 ```
 
 ## 🚀 Quick Start

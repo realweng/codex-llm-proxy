@@ -23,43 +23,25 @@
 
 ## 🔄 架构
 
-```
-┌─────────────────┐
-│   Codex CLI     │  发送: Responses API 请求
-│   (用户端)      │  接收: Responses API 响应
-└────────┬────────┘
-         │ Responses API 格式
-         ▼
-┌─────────────────────────────────────────┐
-│   Codex LLM 代理 (localhost:18765)    │
-│                                          │
-│  ┌────────────────────────────────────┐ │
-│  │  请求转换器                        │ │
-│  │  - Responses API → Chat Completions│ │
-│  │  - 工具调用历史处理                │ │
-│  │  - 模型名映射                      │ │
-│  └────────────────────────────────────┘ │
-│                                          │
-│  ┌────────────────────────────────────┐ │
-│  │  响应转换器                        │ │
-│  │  - Chat Completions → Responses API│ │
-│  │  - 工具调用流式传输                │ │
-│  │  - 事件排序                        │ │
-│  └────────────────────────────────────┘ │
-└──────────────────┬──────────────────────┘
-                   │
-         ┌─────────┴─────────┐
-         │  后端选择器       │
-         │  (glm / kimi)     │
-         └─────────┬─────────┘
-                   │
-     ┌─────────────┴─────────────┐
-     │                           │
-     ▼                           ▼
-┌──────────┐            ┌──────────────┐
-│ GLM API  │            │  Kimi API    │
-│ (智谱AI) │            │ (月之暗面)   │
-└──────────┘            └──────────────┘
+```mermaid
+flowchart TD
+    CLI["Codex CLI<br/>(用户端)"]
+
+    subgraph Proxy["Codex LLM 代理 (localhost:18765)"]
+        direction TB
+        RC["请求转换器<br/>- Responses API → Chat Completions<br/>- 工具调用历史处理<br/>- 模型名映射"]
+        RespC["响应转换器<br/>- Chat Completions → Responses API<br/>- 工具调用流式传输<br/>- 事件排序"]
+    end
+
+    Selector["后端选择器<br/>(glm / kimi)"]
+    GLM["GLM API<br/>(智谱 AI)"]
+    Kimi["Kimi API<br/>(月之暗面)"]
+
+    CLI -- "Responses API 请求" --> Proxy
+    Proxy -- "Responses API 响应" --> CLI
+    Proxy --> Selector
+    Selector --> GLM
+    Selector --> Kimi
 ```
 
 ## 🚀 快速开始
