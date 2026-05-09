@@ -74,7 +74,7 @@ Supported providers: **GLM (智谱 AI)** and **Kimi (月之暗面)**.
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/JichinX/codex-llm-proxy.git
+   git clone https://github.com/realweng/codex-llm-proxy.git
    cd codex-llm-proxy
    ```
 
@@ -243,7 +243,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - [OpenAI Codex](https://github.com/openai/codex) - The amazing coding agent
 - [智谱 AI GLM](https://open.bigmodel.cn/) - Powerful Chinese LLM
 - [月之暗面 Kimi](https://kimi.moonshot.cn/) - Powerful coding model
-- Inspired by the need to use Codex with local/alternative LLM providers
+- [codex-glm-proxy](https://github.com/JichinX/codex-glm-proxy) - The original GLM proxy project that inspired this work
 
 ## 📊 Project Status
 

@@ -74,7 +74,7 @@
 
 1. **克隆仓库**
    ```bash
-   git clone https://github.com/JichinX/codex-llm-proxy.git
+   git clone https://github.com/realweng/codex-llm-proxy.git
    cd codex-llm-proxy
    ```
 
@@ -243,7 +243,7 @@ codex exec "创建一个计算器模块并编写单元测试" --full-auto
 - [OpenAI Codex](https://github.com/openai/codex) - 强大的编程助手
 - [智谱 AI GLM](https://open.bigmodel.cn/) - 强大的国产大模型
 - [月之暗面 Kimi](https://kimi.moonshot.cn/) - 强大的编程模型
-- 灵感来源于使用 Codex 与国产/替代 LLM 提供商的需求
+- [codex-glm-proxy](https://github.com/JichinX/codex-glm-proxy) - 启发了本项目的原始 GLM 代理项目
 
 ## 📊 项目状态
 
