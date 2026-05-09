@@ -26,6 +26,8 @@ sys.stdout.reconfigure(line_buffering=True) if hasattr(sys.stdout, 'reconfigure'
 # Backend configuration
 BACKEND = os.environ.get("BACKEND", "glm")  # "glm" or "kimi"
 PROXY_PORT = int(os.environ.get("PROXY_PORT", 18765))
+# Per-event SSE logging. Set SSE_LOG=0 to keep only the per-request summary.
+SSE_LOG = os.environ.get("SSE_LOG", "1").strip().lower() not in ("0", "false", "no", "off", "")
 
 BACKENDS = {
     "glm": {
@@ -161,38 +163,63 @@ def convert_responses_to_chat(body: dict) -> dict:
         if isinstance(inp, str):
             messages.append({"role": "user", "content": inp})
         elif isinstance(inp, list):
-            # Responses API format: list of message objects
+            # Responses API format: list of message objects.
+            # `pending_reasoning` captures `reasoning` items so they can be
+            # attached to the next assistant message — Kimi's coding endpoint
+            # has thinking enabled and rejects assistant tool_call messages
+            # that lack `reasoning_content`.
+            pending_reasoning = None
             for item in inp:
                 if isinstance(item, dict) and "type" in item:
-                    if item["type"] == "message":
+                    if item["type"] == "reasoning":
+                        # Capture summary text for the next assistant message.
+                        # `encrypted_content` is OpenAI-specific and opaque to
+                        # other providers, so we ignore it.
+                        summary = item.get("summary", [])
+                        parts = []
+                        if isinstance(summary, list):
+                            for s in summary:
+                                if isinstance(s, dict) and s.get("type") == "summary_text":
+                                    parts.append(s.get("text", ""))
+                        pending_reasoning = "\n".join(parts)
+
+                    elif item["type"] == "message":
                         role = item.get("role", "user")
                         # Map "developer" to "system" for GLM compatibility
                         if role == "developer":
                             role = "system"
-                        
+
                         content = item.get("content", [])
+                        msg_dict = None
                         if isinstance(content, list):
-                            # Extract text from content blocks
+                            # Extract text. `input_text` is current user input;
+                            # `output_text` is historical assistant output.
                             text_parts = []
                             for c in content:
                                 if isinstance(c, dict):
-                                    if c.get("type") == "input_text":
+                                    if c.get("type") in ("input_text", "output_text"):
                                         text_parts.append(c.get("text", ""))
                                     elif c.get("type") == "input_image":
                                         # Skip images for now, or handle differently
                                         pass
                             if text_parts:
-                                messages.append({"role": role, "content": " ".join(text_parts)})
+                                msg_dict = {"role": role, "content": " ".join(text_parts)}
                         elif isinstance(content, str):
-                            messages.append({"role": role, "content": content})
-                    
+                            msg_dict = {"role": role, "content": content}
+
+                        if msg_dict is not None:
+                            if role == "assistant" and pending_reasoning:
+                                msg_dict["reasoning_content"] = pending_reasoning
+                            messages.append(msg_dict)
+                        pending_reasoning = None
+
                     elif item["type"] == "function_call":
                         # This is a historical tool call from the model
                         # Convert to assistant message with tool_calls
                         call_id = item.get("call_id", item.get("id", ""))
                         name = item.get("name", "")
                         arguments = item.get("arguments", "{}")
-                        
+
                         # If previous message was also an assistant with tool_calls,
                         # merge into it instead of creating a new message
                         if (messages and messages[-1].get("role") == "assistant"
@@ -205,10 +232,13 @@ def convert_responses_to_chat(body: dict) -> dict:
                                     "arguments": arguments
                                 }
                             })
+                            if "reasoning_content" not in messages[-1]:
+                                messages[-1]["reasoning_content"] = pending_reasoning or ""
                         else:
                             messages.append({
                                 "role": "assistant",
                                 "content": "",
+                                "reasoning_content": pending_reasoning or "",
                                 "tool_calls": [{
                                     "id": call_id,
                                     "type": "function",
@@ -218,7 +248,8 @@ def convert_responses_to_chat(body: dict) -> dict:
                                     }
                                 }]
                             })
-                    
+                        pending_reasoning = None
+
                     elif item["type"] == "function_call_output":
                         # This is the result of a tool call
                         # Convert to tool message
@@ -231,6 +262,7 @@ def convert_responses_to_chat(body: dict) -> dict:
                             "tool_call_id": call_id,
                             "content": output
                         })
+                        pending_reasoning = None
                     
         elif isinstance(inp, dict):
             if "messages" in inp:
@@ -406,6 +438,21 @@ def convert_stream_line(line: bytes) -> bytes:
         return line
 
 
+def _extract_event_type(sse_bytes: bytes) -> str:
+    """Extract the SSE event name from a raw event payload for logging."""
+    if sse_bytes.startswith(b"event: "):
+        nl = sse_bytes.find(b"\n")
+        if nl > 0:
+            return sse_bytes[7:nl].decode("utf-8", errors="replace").strip()
+    if sse_bytes.startswith(b"data: [DONE]"):
+        return "[DONE]"
+    if sse_bytes.startswith(b"data:"):
+        return "data"
+    if sse_bytes.startswith(b":"):
+        return "comment"
+    return "unknown"
+
+
 class ThreadingHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
     """Thread-per-request HTTP server."""
     daemon_threads = True
@@ -548,7 +595,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
 
         log.info("Starting streaming response...")
-        chunk_count = 0
+        upstream_count = 0
+        downstream_count = 0
+        event_type_counts = {}
         stream_done = threading.Event()
 
         # Start a keep-alive thread that sends SSE comments every 3 seconds
@@ -584,14 +633,30 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 if not line:
                     continue
 
+                upstream_count += 1
+                if SSE_LOG:
+                    log.info(
+                        f"SSE upstream #{upstream_count}: "
+                        f"{line[:1500].decode('utf-8', errors='replace')}"
+                    )
+
                 converted_lines = self.convert_stream_line(line)
                 for converted in converted_lines:
                     wfile.write(converted)
+                    downstream_count += 1
+                    event_type = _extract_event_type(converted)
+                    event_type_counts[event_type] = event_type_counts.get(event_type, 0) + 1
+                    if SSE_LOG:
+                        log.info(
+                            f"SSE downstream #{downstream_count} [{event_type}]: "
+                            f"{converted[:800].decode('utf-8', errors='replace').rstrip()}"
+                        )
                 wfile.flush()
-                chunk_count += len(converted_lines)
 
-            log.info(f"Streaming complete, sent {chunk_count} chunks")
-            sse_debug_file.close()
+            log.info(
+                f"Streaming complete: {upstream_count} upstream chunks -> "
+                f"{downstream_count} downstream events; type breakdown={event_type_counts}"
+            )
 
         except Exception as e:
             log.error(f"Streaming error: {e}")
