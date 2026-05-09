@@ -1,0 +1,29 @@
+# Codex Configuration Example for LLM Proxy
+# Copy this file to ~/.codex/config.toml
+
+# --- Option A: Use GLM (智谱 AI) backend ---
+# Set environment: export GLM_API_KEY="your_glm_api_key"
+model_provider = "glm-proxy"
+model = "gpt-4o"  # Will be mapped to glm-5
+
+[model_providers.glm-proxy]
+name = "GLM via Proxy"
+base_url = "http://localhost:18765/v4"
+wire_api = "responses"
+
+# --- Option B: Use Kimi (月之暗面) backend ---
+# Set environment: export BACKEND=kimi  export KIMI_API_KEY="your_kimi_api_key"
+# model_provider = "kimi-proxy"
+# model = "gpt-4o"  # Will be mapped to kimi-for-coding
+#
+# [model_providers.kimi-proxy]
+# name = "Kimi via Proxy"
+# base_url = "http://localhost:18765/v4"
+# wire_api = "responses"
+
+# Optional: Set approval mode
+# approval = "never"  # or "suggest" or "auto"
+
+# Optional: Configure sandbox
+# [sandbox]
+# permissions = ["workspace-write", "network"]
