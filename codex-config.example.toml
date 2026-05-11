@@ -10,6 +10,8 @@ model = "gpt-4o"  # Will be mapped to glm-5
 name = "GLM via Proxy"
 base_url = "http://localhost:18765/v4"
 wire_api = "responses"
+# Note: we intentionally do NOT set requires_openai_auth so Codex CLI
+# treats this as a neutral third-party provider.
 
 # --- Option B: Use Kimi (月之暗面) backend ---
 # Set environment: export BACKEND=kimi  export KIMI_API_KEY="your_kimi_api_key"

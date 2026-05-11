@@ -13,12 +13,14 @@
 
 ## ✨ 特性
 
-- ✅ **有限 Codex 兼容** - 保证基本功能可用
+- ✅ **Computer Use & 浏览器支持** - 通过 namespace 工具展平支持 Codex CLI 的 Computer Use 和 Browser 插件（MCP 工具）
 - ✅ **多后端支持** - 一个参数即可切换 GLM 和 Kimi
 - ✅ **流式响应支持** - 实时流式响应
-- ✅ **工具调用** - 支持 `apply_patch`、`exec` 等 Codex 工具
+- ✅ **工具调用** - 支持 `apply_patch`、`exec` 等 Codex 工具，以及 MCP namespace 工具
 - ✅ **多轮对话** - 保持对话上下文
 - ✅ **自动模型映射** - 自动将 OpenAI 模型名映射到供应商对应版本
+- ✅ **模型列表暴露** - `/models` 端点返回真实后端模型名（如 `glm-5`、`kimi-for-coding`）
+- ✅ **匿名化请求** - 剥离 Codex CLI 身份头，使用中性 User-Agent
 - ✅ **简单配置** - 单个 Python 文件，无需复杂依赖
 
 ## 🔄 架构
@@ -106,10 +108,44 @@ flowchart TD
    wire_api = "responses"
    ```
 
+   > **注意：** 我们有意不设置 `requires_openai_auth`。代理直接与后端供应商处理认证，保持 Codex CLI 请求匿名化。
+
 5. **测试**
    ```bash
    mkdir test-codex && cd test-codex && git init
    codex exec "创建一个 Python hello world 程序" --full-auto
+   ```
+
+## 🖥️ Computer Use & 浏览器支持
+
+本代理通过透明处理 MCP 工具支持 Codex CLI 的 **Computer Use** 和 **浏览器** 插件：
+
+- **Namespace 工具展平** — Codex CLI 将 MCP 工具（浏览器、computer-use 等）包装在 `type: "namespace"` 容器中。代理递归展平为标准 `function` 工具，使后端 LLM 能够看到并调用它们。
+- **Namespace 还原** — 当后端返回工具调用时，代理还原原始工具名和 `namespace` 字段，使 Codex CLI 能正确路由到对应的 MCP 服务器。
+- **占位符处理** — 对话历史中的 `computer_call`、`code_interpreter_call` 等条目被转换为占位消息，保持上下文连贯。
+
+### 在 Codex CLI 中启用 Computer Use
+
+1. 在 Codex CLI 配置（`~/.codex/config.toml`）中启用插件：
+   ```toml
+   [plugins."computer-use@openai-bundled"]
+   enabled = true
+
+   [plugins."browser-use@openai-bundled"]
+   enabled = true
+
+   [plugins."chrome@openai-bundled"]
+   enabled = true
+   ```
+
+2. 设置沙箱模式为完全访问：
+   ```toml
+   sandbox_mode = "danger-full-access"
+   ```
+
+3. 现在可以让 Codex 使用 Chrome 或 Computer Use：
+   ```bash
+   codex exec "打开 Chrome 搜索今天的新闻"
    ```
 
 ## 📋 配置说明
@@ -241,6 +277,10 @@ codex exec "创建一个计算器模块并编写单元测试" --full-auto
 | 工具调用历史 | ✅ 正常 |
 | 工具调用结果 | ✅ 正常 |
 | 多后端 (GLM/Kimi) | ✅ 正常 |
+| MCP namespace 工具 | ✅ 正常 |
+| Computer Use / 浏览器 | ✅ 正常 |
+| 匿名化请求 | ✅ 正常 |
+| /models 返回真实模型名 | ✅ 正常 |
 
 ---
 

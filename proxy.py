@@ -76,6 +76,118 @@ def get_backend():
 
 
 
+def _flatten_responses_tools(tools, _warned_types=None):
+    """Flatten Responses API tools (namespace, custom, etc.) to Chat Completions format.
+
+    Codex CLI wraps MCP tools in type:'namespace' containers; this recursively
+    flattens them so the backend sees plain function tools.
+    """
+    if _warned_types is None:
+        _warned_types = set()
+    result = []
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        ttype = tool.get("type", "")
+        if ttype == "function":
+            if "function" in tool:
+                result.append(tool)
+            else:
+                chat_tool = {"type": "function", "function": {}}
+                if "name" in tool:
+                    chat_tool["function"]["name"] = tool["name"]
+                if "description" in tool:
+                    chat_tool["function"]["description"] = tool["description"]
+                if "parameters" in tool:
+                    chat_tool["function"]["parameters"] = tool["parameters"]
+                result.append(chat_tool)
+        elif ttype == "custom":
+            chat_tool = {"type": "function", "function": {}}
+            chat_tool["function"]["name"] = tool.get("name", "custom_tool")
+            chat_tool["function"]["description"] = tool.get("description", "")
+            chat_tool["function"]["parameters"] = {
+                "type": "object",
+                "properties": {
+                    "input": {"type": "string", "description": "Input to the tool"}
+                },
+                "required": ["input"]
+            }
+            result.append(chat_tool)
+        elif ttype == "namespace":
+            ns_name = tool.get("name", "")
+            inner_tools = tool.get("tools", [])
+            for inner in inner_tools:
+                if not isinstance(inner, dict):
+                    continue
+                inner_type = inner.get("type", "")
+                if inner_type == "function":
+                    chat_tool = {"type": "function", "function": {}}
+                    inner_name = inner.get("name", "")
+                    if ns_name:
+                        chat_tool["function"]["name"] = f"{ns_name}{inner_name}"
+                    else:
+                        chat_tool["function"]["name"] = inner_name
+                    if "description" in inner:
+                        chat_tool["function"]["description"] = inner["description"]
+                    if "parameters" in inner:
+                        chat_tool["function"]["parameters"] = inner["parameters"]
+                    result.append(chat_tool)
+                elif inner_type == "namespace":
+                    result.extend(_flatten_responses_tools([inner], _warned_types))
+                else:
+                    flattened = _flatten_responses_tools([inner], _warned_types)
+                    for ft in flattened:
+                        if ns_name and "function" in ft:
+                            orig_name = ft["function"].get("name", "")
+                            if orig_name:
+                                ft["function"]["name"] = f"{ns_name}{orig_name}"
+                        result.append(ft)
+        elif ttype in ("web_search", "web_search_preview"):
+            log.info(f"Skipping web_search tool (provider-specific): {ttype}")
+        elif ttype in ("computer_use", "computer_use_preview", "computer_call",
+                       "code_interpreter", "code_interpreter_call",
+                       "file_search", "file_search_call",
+                       "image_generation_call", "local_shell", "mcp"):
+            if ttype not in _warned_types:
+                _warned_types.add(ttype)
+                log.info(f"Skipping unsupported tool type: {ttype}")
+        else:
+            if "function" in tool:
+                result.append(tool)
+            elif ttype not in _warned_types:
+                _warned_types.add(ttype)
+                log.info(f"Skipping unknown tool type: {ttype}")
+    return result
+
+
+def _restore_tool_namespace(tool_name, original_tools):
+    """Restore original (name, namespace) from a flattened tool name.
+
+    When namespace tools are flattened, the name becomes {ns}{name}.
+    This reverses the mapping so Codex CLI can route the call correctly.
+    """
+    if not original_tools or not tool_name:
+        return tool_name, None
+    for tool in original_tools:
+        if not isinstance(tool, dict):
+            continue
+        if tool.get("type") == "namespace":
+            ns_name = tool.get("name", "")
+            inner_tools = tool.get("tools", [])
+            for inner in inner_tools:
+                if not isinstance(inner, dict):
+                    continue
+                if inner.get("type") == "function":
+                    inner_name = inner.get("name", "")
+                    expected = f"{ns_name}{inner_name}" if ns_name else inner_name
+                    if expected == tool_name:
+                        return inner_name, ns_name
+        elif tool.get("type") == "function":
+            if tool.get("name") == tool_name:
+                return tool_name, None
+    return tool_name, None
+
+
 def _fix_tool_call_gaps(messages):
     """Ensure every assistant tool_call has a corresponding tool response message.
 
@@ -332,7 +444,20 @@ def convert_responses_to_chat(body: dict) -> dict:
                             "content": extracted
                         })
                         pending_reasoning = None
-                    
+
+                    elif item["type"] in ("computer_call", "code_interpreter_call",
+                                           "file_search_call", "web_search_call",
+                                           "image_generation_call"):
+                        # Responses-native tool calls that the backend doesn't
+                        # support. Convert to a placeholder user message so the
+                        # conversation history stays coherent.
+                        placeholder = f"[{item['type']}]"
+                        status = item.get("status", "")
+                        if status:
+                            placeholder += f" status={status}"
+                        messages.append({"role": "user", "content": placeholder})
+                        pending_reasoning = None
+
         elif isinstance(inp, dict):
             if "messages" in inp:
                 for msg in inp["messages"]:
@@ -371,37 +496,10 @@ def convert_responses_to_chat(body: dict) -> dict:
 
     # Handle tools - convert Responses API format to Chat Completions format
     if "tools" in body:
-        chat_tools = []
-        for tool in body["tools"]:
-            if isinstance(tool, dict):
-                tool_type = tool.get("type", "")
-                # Skip tools that GLM doesn't support
-                if tool_type in ["web_search", "code_interpreter", "file_search", "computer_use"]:
-                    log.info(f"Skipping unsupported tool type: {tool_type}")
-                    continue
-                    
-                # Responses API uses different tool format
-                if tool_type == "function":
-                    # Already in chat format
-                    if "function" in tool:
-                        chat_tools.append(tool)
-                    # Responses format - function definition is at top level
-                    else:
-                        chat_tool = {"type": "function", "function": {}}
-                        if "name" in tool:
-                            chat_tool["function"]["name"] = tool["name"]
-                        if "description" in tool:
-                            chat_tool["function"]["description"] = tool["description"]
-                        if "parameters" in tool:
-                            chat_tool["function"]["parameters"] = tool["parameters"]
-                        chat_tools.append(chat_tool)
-                else:
-                    # Unknown format, try to pass through but only if function is present
-                    if "function" in tool:
-                        chat_tools.append(tool)
+        chat_tools = _flatten_responses_tools(body["tools"])
         if chat_tools:
             chat_body["tools"] = chat_tools
-            log.info(f"Converted tools: {len(chat_tools)} tools (filtered from {len(body['tools'])})")
+            log.info(f"Converted tools: {len(chat_tools)} tools (from {len(body['tools'])} original)")
 
     if "tool_choice" in body:
         chat_body["tool_choice"] = body["tool_choice"]
@@ -414,7 +512,7 @@ def convert_responses_to_chat(body: dict) -> dict:
     return chat_body
 
 
-def convert_chat_to_responses(response_body: dict, is_stream: bool) -> dict:
+def convert_chat_to_responses(response_body: dict, is_stream: bool, original_tools=None) -> dict:
     """Convert Chat Completions response back to Responses format."""
     if is_stream:
         # For streaming, the format is similar but with different event types
@@ -455,13 +553,18 @@ def convert_chat_to_responses(response_body: dict, is_stream: bool) -> dict:
             # Handle tool calls
             if "tool_calls" in msg:
                 for tc in msg["tool_calls"]:
-                    content.append({
+                    raw_name = tc.get("function", {}).get("name", "")
+                    restored_name, ns = _restore_tool_namespace(raw_name, original_tools)
+                    tool_call_item = {
                         "type": "tool_call",
                         "id": tc.get("id", ""),
                         "call_id": tc.get("id", ""),
-                        "name": tc.get("function", {}).get("name", ""),
+                        "name": restored_name,
                         "arguments": tc.get("function", {}).get("arguments", "{}")
-                    })
+                    }
+                    if ns:
+                        tool_call_item["namespace"] = ns
+                    content.append(tool_call_item)
             
             output_item = {
                 "type": "message",
@@ -583,7 +686,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps({"status": "ok"}).encode())
         elif self.path == "/v4/models" or self.path == "/v1/models":
-            self.forward_request("GET")
+            self.handle_models()
         else:
             self.send_response(404)
             self.send_header("Connection", "close")
@@ -608,6 +711,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             # Convert to Chat Completions format
             chat_body = convert_responses_to_chat(body)
             is_stream = body.get("stream", False)
+            self._original_tools = body.get("tools", [])  # Save for namespace restore
 
             log.info(f"Stream mode: {is_stream}")
             log.info(f"Message structure: {_message_summary(chat_body.get('messages', []))}")
@@ -618,17 +722,18 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             api_base = backend["api_base"]
             api_key = backend["api_key"]
 
-            # Build headers with User-Agent to satisfy Kimi's coding-agent check.
-            # Additional headers make the request look like it comes from Claude Code.
+            # Build headers.  We intentionally strip Codex CLI identity headers
+            # (originator, x-codex-*, x-openai-*, chatgpt-account-id, session_id,
+            # thread_id) so the backend sees a neutral third-party request.
+            # Kimi's coding endpoint gates on a coding-agent User-Agent, so we
+            # keep a minimal one only for that backend.
             req_headers = {
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {api_key}",
                 "Accept": "text/event-stream" if is_stream else "application/json",
-                "User-Agent": "claude-cli/2.1.132 (external, cli)",
-                "X-Client-Name": "claude-cli",
-                "X-Client-Version": "2.1.132",
-                "X-Client-Platform": "macos",
             }
+            if BACKEND == "kimi":
+                req_headers["User-Agent"] = "KimiCLI/1.40.0"
 
             url_parts = urllib.parse.urlparse(api_base)
             conn = http.client.HTTPSConnection(url_parts.netloc, timeout=120)
@@ -656,7 +761,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 else:
                     response_body = json.loads(glm_resp.read())
                     log.info(f"Backend response: {json.dumps(response_body, ensure_ascii=False)[:2000]}")
-                    converted = convert_chat_to_responses(response_body, False)
+                    converted = convert_chat_to_responses(response_body, False, self._original_tools)
                     log.info(f"Converted response: {json.dumps(converted, ensure_ascii=False)[:2000]}")
 
                     self.send_response(200)
@@ -875,14 +980,17 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                     "content": [{"type": "output_text", "text": self.full_content}] if self.full_content else []
                 })
             for tc_index, tc_data in self.tool_calls.items():
-                outputs.append({
+                fc_out = {
                     "type": "function_call",
                     "id": f"fc_{tc_data['id']}",
                     "call_id": tc_data["id"],
                     "name": tc_data["name"],
                     "arguments": tc_data["arguments"],
                     "status": "completed"
-                })
+                }
+                if tc_data.get("namespace"):
+                    fc_out["namespace"] = tc_data["namespace"]
+                outputs.append(fc_out)
 
             if self.response_id:
                 completed_event = {
@@ -1009,28 +1117,37 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                             tc_function = tc.get("function", {})
                             tc_name = tc_function.get("name", "")
                             tc_args = tc_function.get("arguments", "")
-                            
+
+                            # Restore namespace before storing
+                            ns = None
+                            if getattr(self, "_original_tools", None):
+                                tc_name, ns = _restore_tool_namespace(tc_name, self._original_tools)
+
                             # If this is a new tool call, send output_item.added event
                             if tc_index not in self.tool_calls:
                                 self.tool_calls[tc_index] = {
                                     "id": tc_id,
                                     "name": tc_name,
-                                    "arguments": ""
+                                    "arguments": "",
+                                    "namespace": ns
                                 }
-                                
+
                                 # Send function_call item added event
+                                fc_item = {
+                                    "type": "function_call",
+                                    "id": f"fc_{tc_id}",
+                                    "call_id": tc_id,
+                                    "name": tc_name,
+                                    "arguments": "",
+                                    "status": "in_progress"
+                                }
+                                if ns:
+                                    fc_item["namespace"] = ns
                                 tool_item_event = {
                                     "type": "response.output_item.added",
                                     "sequence_number": self.sequence_number,
                                     "output_index": tc_index + 1,  # After text output
-                                    "item": {
-                                        "type": "function_call",
-                                        "id": f"fc_{tc_id}",
-                                        "call_id": tc_id,
-                                        "name": tc_name,
-                                        "arguments": "",
-                                        "status": "in_progress"
-                                    }
+                                    "item": fc_item
                                 }
                                 self.sequence_number += 1
                                 results.append(f"event: response.output_item.added\ndata: {json.dumps(tool_item_event)}\n\n".encode())
@@ -1071,18 +1188,21 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                                 results.append(f"event: response.function_call_arguments.done\ndata: {json.dumps(tool_done_event)}\n\n".encode())
                                 
                                 # Send output_item.done for function_call
+                                fc_done_item = {
+                                    "type": "function_call",
+                                    "id": f"fc_{tc_id}",
+                                    "call_id": tc_id,
+                                    "name": tc_name,
+                                    "arguments": tc_args,
+                                    "status": "completed"
+                                }
+                                if tc_data.get("namespace"):
+                                    fc_done_item["namespace"] = tc_data["namespace"]
                                 tool_item_done = {
                                     "type": "response.output_item.done",
                                     "sequence_number": self.sequence_number,
                                     "output_index": tc_index + 1,
-                                    "item": {
-                                        "type": "function_call",
-                                        "id": f"fc_{tc_id}",
-                                        "call_id": tc_id,
-                                        "name": tc_name,
-                                        "arguments": tc_args,
-                                        "status": "completed"
-                                    }
+                                    "item": fc_done_item
                                 }
                                 self.sequence_number += 1
                                 results.append(f"event: response.output_item.done\ndata: {json.dumps(tool_item_done)}\n\n".encode())
@@ -1140,6 +1260,52 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         except json.JSONDecodeError as e:
             log.error(f"Failed to parse chunk: {e}, line: {line}")
             return [line + b"\n"]
+
+    def handle_models(self):
+        """Return a model list that exposes the real backend model names."""
+        backend = get_backend()
+        model_mapping = backend["model_mapping"]
+        default_model = backend["default_model"]
+
+        seen = set()
+        data = []
+
+        # First, expose the real backend model names so Codex can select them
+        for backend_name in sorted(set(model_mapping.values())):
+            if backend_name not in seen:
+                seen.add(backend_name)
+                data.append({
+                    "id": backend_name,
+                    "object": "model",
+                    "created": 0,
+                    "owned_by": BACKEND,
+                })
+
+        # Then add OpenAI aliases with mapping info in owned_by
+        for openai_name, backend_name in sorted(model_mapping.items()):
+            if openai_name not in seen:
+                seen.add(openai_name)
+                data.append({
+                    "id": openai_name,
+                    "object": "model",
+                    "created": 0,
+                    "owned_by": f"{BACKEND}:{backend_name}",
+                })
+
+        # Ensure default model is listed
+        if default_model not in seen:
+            data.append({
+                "id": default_model,
+                "object": "model",
+                "created": 0,
+                "owned_by": BACKEND,
+            })
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(json.dumps({"object": "list", "data": data}).encode())
 
     def forward_request(self, method):
         """Forward request directly without conversion."""

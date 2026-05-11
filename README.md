@@ -13,12 +13,14 @@ Supported providers: **GLM (智谱 AI)** and **Kimi (月之暗面)**.
 
 ## ✨ Features
 
-- ✅ **Limited Codex Compatibility** - Core features work with OpenAI Codex CLI
+- ✅ **Computer Use & Browser Support** - Use Codex CLI's Computer Use and Browser plugins (via MCP tools) through namespace tool flattening
 - ✅ **Multi-Backend Support** - Switch between GLM and Kimi with a single flag
 - ✅ **Streaming Support** - Real-time streaming responses
-- ✅ **Tool Calling** - Supports `apply_patch`, `exec`, and other Codex tools
+- ✅ **Tool Calling** - Supports `apply_patch`, `exec`, and other Codex tools, plus MCP namespace tools
 - ✅ **Multi-turn Conversations** - Maintains conversation context
 - ✅ **Automatic Model Mapping** - Maps OpenAI model names to provider equivalents
+- ✅ **Model List Exposure** - `/models` endpoint returns real backend model names (e.g., `glm-5`, `kimi-for-coding`)
+- ✅ **Anonymous Requests** - Strips Codex CLI identity headers; neutral User-Agent
 - ✅ **Easy Setup** - Single Python file, no complex dependencies
 
 ## 🔄 Architecture
@@ -106,10 +108,44 @@ flowchart TD
    wire_api = "responses"
    ```
 
+   > **Note:** We intentionally do NOT set `requires_openai_auth`. The proxy handles authentication directly with the backend provider, keeping Codex CLI requests anonymous.
+
 5. **Test it!**
    ```bash
    mkdir test-codex && cd test-codex && git init
    codex exec "Create a Python hello world program" --full-auto
+   ```
+
+## 🖥️ Computer Use & Browser Support
+
+This proxy supports Codex CLI's **Computer Use** and **Browser** plugins by transparently handling MCP tools:
+
+- **Namespace tool flattening** — Codex CLI wraps MCP tools (browser, computer-use, etc.) in `type: "namespace"` containers. The proxy recursively flattens them into standard `function` tools so the backend LLM can see and invoke them.
+- **Namespace restoration** — When the backend returns a tool call, the proxy restores the original tool name and `namespace` field so Codex CLI can correctly route the call to the corresponding MCP server.
+- **Placeholder handling** — Historical `computer_call`, `code_interpreter_call`, etc. items in conversation history are converted to placeholder messages to keep context coherent.
+
+### Enable Computer Use in Codex CLI
+
+1. Enable the plugins in your Codex CLI config (`~/.codex/config.toml`):
+   ```toml
+   [plugins."computer-use@openai-bundled"]
+   enabled = true
+
+   [plugins."browser-use@openai-bundled"]
+   enabled = true
+
+   [plugins."chrome@openai-bundled"]
+   enabled = true
+   ```
+
+2. Set sandbox mode to full access:
+   ```toml
+   sandbox_mode = "danger-full-access"
+   ```
+
+3. Now you can ask Codex to use Chrome or Computer Use:
+   ```bash
+   codex exec "Open Chrome and search for today's news"
    ```
 
 ## 📋 Configuration
@@ -241,6 +277,10 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 | Tool call history | ✅ Working |
 | Tool call results | ✅ Working |
 | Multi-backend (GLM/Kimi) | ✅ Working |
+| MCP namespace tools | ✅ Working |
+| Computer Use / Browser | ✅ Working |
+| Anonymous requests | ✅ Working |
+| Real model names in /models | ✅ Working |
 
 ---
 
