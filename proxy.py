@@ -162,6 +162,29 @@ def _fix_tool_call_gaps(messages):
     return result
 
 
+def _extract_content_text(content):
+    """Extract plain text from Responses API content blocks.
+
+    Returns the extracted text string, or None if no text was found.
+    Skips image/file blocks — most coding backends don't support them,
+    and passing raw Responses `input_image` blocks causes a 400.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        text_parts = []
+        for c in content:
+            if isinstance(c, dict):
+                ctype = c.get("type", "")
+                if ctype in ("input_text", "output_text"):
+                    text_parts.append(c.get("text", ""))
+                elif ctype in ("input_image", "output_image", "input_file"):
+                    # Silently skip images/files for now.
+                    pass
+        return " ".join(text_parts) if text_parts else None
+    return str(content) if content is not None else None
+
+
 def convert_responses_to_chat(body: dict) -> dict:
     """Convert Responses API format to Chat Completions API format."""
     chat_body = {}
@@ -211,22 +234,8 @@ def convert_responses_to_chat(body: dict) -> dict:
                             role = "system"
 
                         content = item.get("content", [])
-                        msg_dict = None
-                        if isinstance(content, list):
-                            # Extract text. `input_text` is current user input;
-                            # `output_text` is historical assistant output.
-                            text_parts = []
-                            for c in content:
-                                if isinstance(c, dict):
-                                    if c.get("type") in ("input_text", "output_text"):
-                                        text_parts.append(c.get("text", ""))
-                                    elif c.get("type") == "input_image":
-                                        # Skip images for now, or handle differently
-                                        pass
-                            if text_parts:
-                                msg_dict = {"role": role, "content": " ".join(text_parts)}
-                        elif isinstance(content, str):
-                            msg_dict = {"role": role, "content": content}
+                        extracted = _extract_content_text(content)
+                        msg_dict = {"role": role, "content": extracted} if extracted is not None else None
 
                         if msg_dict is not None:
                             if role == "assistant" and pending_reasoning:
@@ -278,10 +287,17 @@ def convert_responses_to_chat(body: dict) -> dict:
                         call_id = item.get("call_id", item.get("id", ""))
                         output = item.get("output", "")
 
+                        # Tool output may be a content array (e.g. browser tool
+                        # returning input_image blocks). Extract text, or fall
+                        # back to empty string so content is always a string.
+                        extracted = _extract_content_text(output)
+                        if extracted is None:
+                            extracted = ""
+
                         messages.append({
                             "role": "tool",
                             "tool_call_id": call_id,
-                            "content": output
+                            "content": extracted
                         })
                         pending_reasoning = None
                     
@@ -291,9 +307,23 @@ def convert_responses_to_chat(body: dict) -> dict:
                     role = msg.get("role", "user")
                     if role == "developer":
                         role = "system"
-                    messages.append({"role": role, "content": msg.get("content", "")})
+                    # Content may be a string or an array of content blocks
+                    # (e.g. from Codex Desktop's browser tool sending input_image).
+                    extracted = _extract_content_text(msg.get("content", ""))
+                    msg_dict = {"role": role}
+                    if extracted is not None:
+                        msg_dict["content"] = extracted
+                    # Preserve tool_calls / tool_call_id if already in Chat
+                    # Completions format (Codex Desktop may send them directly).
+                    if msg.get("tool_calls"):
+                        msg_dict["tool_calls"] = msg["tool_calls"]
+                    if msg.get("tool_call_id"):
+                        msg_dict["tool_call_id"] = msg["tool_call_id"]
+                    messages.append(msg_dict)
             elif "content" in inp:
-                messages.append({"role": "user", "content": inp["content"]})
+                extracted = _extract_content_text(inp["content"])
+                if extracted is not None:
+                    messages.append({"role": "user", "content": extracted})
 
     # Validate message sequence: ensure every tool_call has a matching tool response.
     # Some providers (Kimi) strictly require this. If a tool_call lacks a response,
@@ -538,8 +568,36 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             chat_body = convert_responses_to_chat(body)
             is_stream = body.get("stream", False)
 
+            # Debug: scan incoming input for image blocks so we can see
+            # exactly what Codex Desktop is sending.
+            if "input" in body:
+                inp = body["input"]
+                if isinstance(inp, list):
+                    for idx, item in enumerate(inp):
+                        if isinstance(item, dict) and item.get("type") == "message":
+                            content = item.get("content", [])
+                            if isinstance(content, list):
+                                for j, block in enumerate(content):
+                                    if isinstance(block, dict) and block.get("type") in ("input_image", "output_image"):
+                                        log.warning(
+                                            f"input[{idx}].content[{j}] type={block.get('type')!r} "
+                                            f"role={item.get('role')!r}"
+                                        )
+
             log.info(f"Stream mode: {is_stream}")
             log.info(f"Message structure: {_message_summary(chat_body.get('messages', []))}")
+
+            # Defensive scan: log any message whose content is still a list
+            # (should have been flattened to a string by _extract_content_text).
+            for idx, msg in enumerate(chat_body.get("messages", [])):
+                c = msg.get("content")
+                if isinstance(c, list):
+                    types = [block.get("type") for block in c if isinstance(block, dict)]
+                    log.warning(
+                        f"message[{idx}] content is still a list — types={types} "
+                        f"role={msg.get('role')!r}"
+                    )
+
             log.info(f"Converted chat_body: {json.dumps(chat_body, ensure_ascii=False, indent=2)[:2000]}")
 
             # Forward to backend
