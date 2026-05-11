@@ -533,6 +533,15 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         log.info(format, *args)
 
+    def handle_error(self):
+        """Suppress scary tracebacks for routine client disconnects."""
+        cls, exc = sys.exc_info()[:2]
+        if cls in (BrokenPipeError, ConnectionResetError):
+            log.info(f"Client disconnected ({exc})")
+            return
+        # Everything else falls back to the default handler (prints traceback).
+        super().handle_error()
+
     def do_GET(self):
         """Handle health checks."""
         if self.path == "/health":
@@ -663,6 +672,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(error_body.encode())
 
+        except (BrokenPipeError, ConnectionResetError) as e:
+            log.info(f"Client disconnected during request handling: {e}")
+
         except Exception as e:
             log.error(f"Proxy error: {e}")
             self.send_response(500)
@@ -755,6 +767,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 f"{downstream_count} downstream events; type breakdown={event_type_counts}"
             )
 
+        except (BrokenPipeError, ConnectionResetError) as e:
+            log.info(f"Client disconnected during stream: {e}")
         except Exception as e:
             log.error(f"Streaming error: {e}")
         finally:
