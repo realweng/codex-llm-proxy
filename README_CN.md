@@ -93,7 +93,7 @@ flowchart TD
 
    [model_providers.glm-proxy]
    name = "GLM via Proxy"
-   base_url = "http://localhost:18765/v4"
+   base_url = "http://localhost:18765/v1"
    wire_api = "responses"
    ```
 
@@ -104,7 +104,7 @@ flowchart TD
 
    [model_providers.kimi-proxy]
    name = "Kimi via Proxy"
-   base_url = "http://localhost:18765/v4"
+   base_url = "http://localhost:18765/v1"
    wire_api = "responses"
    ```
 
@@ -115,6 +115,60 @@ flowchart TD
    mkdir test-codex && cd test-codex && git init
    codex exec "创建一个 Python hello world 程序" --full-auto
    ```
+
+## 🔄 自动接管 Codex 配置
+
+`./scripts/start.sh` 不只是启动 HTTP 代理 —— 它会先 snapshot 你当前的 `~/.codex/config.toml`，根据所选 backend 生成一份 model catalog（`~/.codex-llm-proxy/model-catalog.json`，列出 `gpt-5.x` 模型族），然后改写 config.toml 让 Codex（CLI 和 Desktop App）把 `openai_base_url` 和 `model_catalog_json` 都指向本代理。`./scripts/stop.sh` 会从 snapshot 还原。
+
+| 路径 | 作用 |
+|---|---|
+| `~/.codex-llm-proxy/codex-config.snapshot.toml` | start 时的 config.toml 1:1 拷贝（stop 时还原） |
+| `~/.codex-llm-proxy/model-catalog.json` | 自动生成的 model catalog，被 Codex 通过 `model_catalog_json` 读取 |
+| `~/.codex-llm-proxy/applied.txt` | sentinel —— 代理正在占用 config 时存在 |
+
+如果检测到 `Codex App Transfer.app` 已经在运行，会**自动跳过**改写避免冲突（stderr 给警告），代理本身仍然会起来。需要手动还原时：
+
+```bash
+python3 scripts/codex_config.py restore
+```
+
+## 🖱️ Codex 桌面应用增强（可选）
+
+除了上面的 CLI 流程，本仓库还把 [BigPizzaV3/CodexPlusPlus](https://github.com/BigPizzaV3/CodexPlusPlus) 作为 **git submodule** 引入 `vendor/CodexPlusPlus/`（钉在 `v1.0.5.1`）。CodexPlusPlus 启动 Codex Desktop App 时开启 Chrome DevTools Protocol，并向渲染进程注入脚本，作用：
+
+- 解锁 API Key 登录模式下被禁用的左侧 **「插件」** 入口；
+- 启用插件市场的 **「安装」** 按钮；
+- 在会话列表悬停时显示 **「删除」** 按钮，顶部菜单栏增加 `Codex++` 菜单。
+
+它操作的是 Electron 渲染端的 React 状态，跟本代理是**两个独立层**，可以叠加但不互相依赖。同时启用两者可以获得完整体验。
+
+### 一次性安装
+
+```bash
+# 拉取 submodule 源码
+git submodule update --init --recursive
+
+# 创建 vendor/.venv 并安装 CodexPlusPlus（需要 Python 3.11+）
+./scripts/codex-app-setup.sh
+```
+
+### 运行
+
+```bash
+# 终端 1：保持代理运行
+export GLM_API_KEY=...    # 或 KIMI_API_KEY
+./scripts/start.sh -p glm
+
+# 终端 2：启动 Codex Desktop 并注入
+export OPENAI_BASE_URL=http://localhost:18765/v1   # 见下方说明
+./scripts/codex-app.sh
+```
+
+> **base URL 说明。** CodexPlusPlus **不会**把 Codex Desktop App 的 OpenAI 端点指到本代理。`OPENAI_BASE_URL` / `OPENAI_API_BASE` 是否被读取取决于具体的 Codex Desktop App 构建；如果不读，请在 Codex App 自己的设置里配置自定义 base URL。即使路由没生效，"插件 UI 解锁 + 会话删除"功能仍可用，只是 Desktop App 的 LLM 流量不会走代理。
+
+> **License 说明。** CodexPlusPlus 上游仓库没有 LICENSE 文件。本仓库仅以 submodule 指针引用，不再分发其源码；所有使用受上游条款约束，详见 `vendor/CodexPlusPlus/README.md` 和上方上游链接。
+
+> **平台说明。** 上游仅支持 macOS 和 Windows，不支持 Linux。
 
 ## 🖥️ Computer Use & 浏览器支持
 
@@ -176,27 +230,23 @@ flowchart TD
 
 ### GLM 后端
 
-| OpenAI 模型 | GLM 模型 | 说明 |
-|------------|----------|------|
-| `gpt-4` | `glm-4` | 标准 GPT-4 |
-| `gpt-4-turbo` | `glm-4` | GPT-4 Turbo |
-| `gpt-4o` | `glm-5` | **推荐**，最佳编码体验 |
-| `gpt-4o-mini` | `glm-4-flash` | 更快、更便宜 |
-| `gpt-3.5-turbo` | `glm-4-flash` | 旧版支持 |
-| `gpt-5.x-codex` | `glm-5` | 未来 Codex 模型 |
+| OpenAI / Codex 模型 | GLM 模型 | 说明 |
+|---------------------|----------|------|
+| `gpt-5.4` / `gpt-5.5` / `gpt-5.4-mini` | `glm-5.1` | **推荐** —— Codex Desktop App 默认模型族 |
+| `gpt-5.3-codex` / `gpt-5.2` / `gpt-5.2-codex` | `glm-5.1` | 旧版 Codex 模型 |
+| `gpt-4o` | `glm-5.1` | Codex CLI 推荐 |
+| `gpt-4` / `gpt-4-turbo` | `glm-4` | 旧版 GPT-4 系列 |
+| `gpt-4o-mini` / `gpt-3.5-turbo` | `glm-4-flash` | 更快、更便宜 |
 
 ### Kimi 后端
 
-| OpenAI 模型 | Kimi 模型 | 说明 |
-|------------|-----------|------|
-| `gpt-4` | `kimi-for-coding` | |
-| `gpt-4-turbo` | `kimi-for-coding` | |
-| `gpt-4o` | `kimi-for-coding` | **推荐** |
-| `gpt-4o-mini` | `kimi-for-coding` | |
-| `gpt-3.5-turbo` | `kimi-for-coding` | 旧版支持 |
-| `gpt-5.x-codex` | `kimi-for-coding` | 未来 Codex 模型 |
+| OpenAI / Codex 模型 | Kimi 模型 | 说明 |
+|---------------------|-----------|------|
+| `gpt-5.4` / `gpt-5.5` / `gpt-5.4-mini` | `kimi-for-coding` | **推荐** —— Codex Desktop App 默认模型族 |
+| `gpt-5.3-codex` / `gpt-5.2` / `gpt-5.2-codex` | `kimi-for-coding` | 旧版 Codex 模型 |
+| `gpt-4` / `gpt-4-turbo` / `gpt-4o` / `gpt-4o-mini` / `gpt-3.5-turbo` | `kimi-for-coding` | 统一映射到同一个编码模型 |
 
-**建议：** 在 Codex 配置中使用 `model = "gpt-4o"` 以获得最佳效果。
+**建议：** 在 Codex 配置中使用 `model = "gpt-5.4"` —— 跟 Codex Desktop App 默认选择和 `codex-app-transfer` 内置 model catalog 的路由保持一致。
 
 ## 🔧 管理命令
 

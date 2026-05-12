@@ -34,16 +34,20 @@ BACKENDS = {
         "api_base": os.environ.get("GLM_API_BASE", "https://open.bigmodel.cn/api/coding/paas/v4"),
         "api_key": os.environ.get("GLM_API_KEY", ""),
         "model_mapping": {
-            "glm-5": "glm-5",
+            "glm-5.1": "glm-5.1",
             "gpt-4": "glm-4",
             "gpt-4-turbo": "glm-4",
-            "gpt-4o": "glm-5",
+            "gpt-4o": "glm-5.1",
             "gpt-4o-mini": "glm-4-flash",
             "gpt-3.5-turbo": "glm-4-flash",
-            "gpt-5.2-codex": "glm-5",
-            "gpt-5.3-codex": "glm-5",
+            "gpt-5.5": "glm-5.1",
+            "gpt-5.4": "glm-5.1",
+            "gpt-5.4-mini": "glm-5.1",
+            "gpt-5.3-codex": "glm-5.1",
+            "gpt-5.2": "glm-5.1",
+            "gpt-5.2-codex": "glm-5.1",
         },
-        "default_model": "glm-5",
+        "default_model": "glm-5.1",
     },
     "kimi": {
         "api_base": os.environ.get("KIMI_API_BASE", "https://api.kimi.com/coding/v1"),
@@ -55,8 +59,12 @@ BACKENDS = {
             "gpt-4o": "kimi-for-coding",
             "gpt-4o-mini": "kimi-for-coding",
             "gpt-3.5-turbo": "kimi-for-coding",
-            "gpt-5.2-codex": "kimi-for-coding",
+            "gpt-5.5": "kimi-for-coding",
+            "gpt-5.4": "kimi-for-coding",
+            "gpt-5.4-mini": "kimi-for-coding",
             "gpt-5.3-codex": "kimi-for-coding",
+            "gpt-5.2": "kimi-for-coding",
+            "gpt-5.2-codex": "kimi-for-coding",
         },
         "default_model": "kimi-for-coding",
     },
@@ -1323,8 +1331,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             }
 
             path = self.path
-            if path.startswith("/v4/"):
-                path = path[3:]  # Remove /v4 prefix
+            if path.startswith("/v1/") or path.startswith("/v4/"):
+                path = path[3:]  # Strip client-side version prefix; upstream backends carry their own (e.g. GLM's /v4 lives in api_base)
 
             req = urllib.request.Request(
                 f"{api_base}{path}",

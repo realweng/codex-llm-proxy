@@ -53,6 +53,12 @@ fi
 
 # Start proxy
 export BACKEND
+
+# Snapshot ~/.codex/config.toml and rewrite it to point Codex at this proxy.
+# Mirrors codex-app-transfer's autoApplyOnStart behavior. Restored by stop.sh.
+python3 "$SCRIPT_DIR/codex_config.py" apply --port "${PROXY_PORT:-18765}" --backend "$BACKEND" || \
+    echo "Warning: codex config apply failed (proxy will still start)" >&2
+
 echo "Starting Codex LLM Proxy (backend: $BACKEND)..."
 nohup python3 "$SCRIPT_DIR/../proxy.py" > "$LOG_FILE" 2>&1 &
 PID=$!

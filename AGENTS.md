@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
 
 ## Overview
 
@@ -79,21 +79,5 @@ Each backend has its own `model_mapping`. Requests with unmapped model names fal
 
 - **No tests.** Verify changes by starting the proxy and running `codex exec "..."` end-to-end, watching `/tmp/codex-llm-proxy.log`. Both streaming and tool-calling paths need exercising.
 - The module-level `convert_stream_line` is dead code — the streaming path uses `ProxyHandler.convert_stream_line`. Don't confuse them.
-- The `User-Agent: claude-cli/...` header in `handle_responses` is intentional — Kimi's coding endpoint gates on a coding-agent UA. Removing it will 4xx Kimi requests.
+- The `User-Agent: Codex-cli/...` header in `handle_responses` is intentional — Kimi's coding endpoint gates on a coding-agent UA. Removing it will 4xx Kimi requests.
 - Logs include full request/response bodies (truncated to 2–10 KB). Be aware when sharing them.
-
-## Automatic config management (`scripts/codex_config.py`)
-
-`scripts/start.sh` calls `codex_config.py apply` before launching `proxy.py`, and `scripts/stop.sh` calls `codex_config.py restore` after killing it. This mirrors `codex-app-transfer`'s `autoApplyOnStart` + `restoreCodexOnExit` lifecycle: snapshot `~/.codex/config.toml` → write `~/.codex-llm-proxy/model-catalog.json` (gpt-5.x catalog mirroring the codex-app-transfer reference) → rewrite the user's config to point Codex at this proxy. State directory: `~/.codex-llm-proxy/` (snapshot, catalog, `applied.txt` sentinel).
-
-TOML rewrite strategy is **line-based** (no third-party writer; tomllib is read-only): split at the first `[section]` header, strip our four top-level managed keys (`model_provider`/`model`/`openai_base_url`/`model_catalog_json`) and the entire `[model_providers.openai]` block, then re-inject a managed top block + a managed section block surrounded by `# vvv ... codex-llm-proxy managed ... ^^^` markers. The rewrite is idempotent — re-applying on an already-modified config strips the previous managed block first. Snapshot is taken **only when `applied.txt` is absent**, so a crashed proxy + re-apply preserves the original.
-
-`Codex App Transfer.app` interlock: `apply` calls `pgrep -f "Codex App Transfer"`; if it hits, apply skips (warning on stderr) and the proxy starts anyway. This prevents the two tools from fighting over the same file. `restore` runs unconditionally on stop (idempotent no-op if `applied.txt` is missing).
-
-## Optional: Codex Desktop App enhancement (`vendor/CodexPlusPlus`)
-
-`vendor/CodexPlusPlus/` is a git submodule pinned to upstream tag `v1.0.5.1` (https://github.com/BigPizzaV3/CodexPlusPlus). It launches the Codex Desktop App with `--remote-debugging-port=9229` and injects `inject/renderer-inject.js` into the Electron renderer via Chrome DevTools Protocol — flipping React's Auth Context `authMethod` from `apikey` to `chatgpt` so the Plugins UI unlocks, plus adding session-delete buttons.
-
-It is **independent** of `proxy.py` (different layer: renderer-side React state vs. HTTP-layer translation). Both can run; neither is required by the other. CodexPlusPlus requires Python 3.11+ and pulls in `requests` and `websocket-client`; these live in `vendor/.venv/` (created by `scripts/codex-app-setup.sh`) so the proxy itself stays stdlib-only.
-
-Launch order: `./scripts/start.sh -p <backend>` (proxy) → `./scripts/codex-app.sh` (Codex App + injection). CodexPlusPlus does **not** set `OPENAI_BASE_URL` — pointing Codex Desktop at this proxy is the user's responsibility (in-app settings or shell env var, App-dependent). Upstream has no LICENSE file, so this repo references it only as a submodule pointer and never redistributes its source. Upgrade by `git -C vendor/CodexPlusPlus fetch --tags && git -C vendor/CodexPlusPlus checkout <new-tag> && git add vendor/CodexPlusPlus`.

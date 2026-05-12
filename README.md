@@ -93,7 +93,7 @@ flowchart TD
 
    [model_providers.glm-proxy]
    name = "GLM via Proxy"
-   base_url = "http://localhost:18765/v4"
+   base_url = "http://localhost:18765/v1"
    wire_api = "responses"
    ```
 
@@ -104,7 +104,7 @@ flowchart TD
 
    [model_providers.kimi-proxy]
    name = "Kimi via Proxy"
-   base_url = "http://localhost:18765/v4"
+   base_url = "http://localhost:18765/v1"
    wire_api = "responses"
    ```
 
@@ -115,6 +115,60 @@ flowchart TD
    mkdir test-codex && cd test-codex && git init
    codex exec "Create a Python hello world program" --full-auto
    ```
+
+## 🔄 Automatic config management
+
+`./scripts/start.sh` doesn't just spin up the HTTP proxy — it also snapshots your existing `~/.codex/config.toml`, generates a model catalog (`~/.codex-llm-proxy/model-catalog.json`) listing the `gpt-5.x` family, and rewrites the config so Codex (both CLI and Desktop App) points its `openai_base_url` and `model_catalog_json` at this proxy. `./scripts/stop.sh` restores the original config from the snapshot.
+
+| Path | Purpose |
+|---|---|
+| `~/.codex-llm-proxy/codex-config.snapshot.toml` | 1:1 copy of your config at start time (restored on stop) |
+| `~/.codex-llm-proxy/model-catalog.json` | Generated model catalog Codex reads via `model_catalog_json` |
+| `~/.codex-llm-proxy/applied.txt` | Sentinel — present while the proxy is holding your config |
+
+If `Codex App Transfer.app` is detected running, the rewrite is automatically **skipped** to avoid conflict (you'll see a warning on stderr); the proxy itself still starts. To manually restore at any time:
+
+```bash
+python3 scripts/codex_config.py restore
+```
+
+## 🖱️ Codex Desktop App enhancement (optional)
+
+Beyond the CLI flow above, this repo also ships [BigPizzaV3/CodexPlusPlus](https://github.com/BigPizzaV3/CodexPlusPlus) as a **git submodule** at `vendor/CodexPlusPlus/` (pinned to `v1.0.5.1`). CodexPlusPlus launches the Codex Desktop App with Chrome DevTools Protocol enabled and injects a renderer script that:
+
+- unlocks the **Plugins** nav entry that is normally disabled in API-Key login mode,
+- enables the "Install" buttons in the plugin marketplace,
+- adds a session-**delete** button in the sidebar plus a `Codex++` menu in the top bar.
+
+It operates on the Electron renderer's React state and is **independent** of this proxy — they stack but do not interact. Use both for the full experience.
+
+### Setup (one-time)
+
+```bash
+# Pull the submodule
+git submodule update --init --recursive
+
+# Create vendor/.venv and install CodexPlusPlus into it (Python 3.11+ required)
+./scripts/codex-app-setup.sh
+```
+
+### Run
+
+```bash
+# Terminal 1: keep the proxy running
+export GLM_API_KEY=...    # or KIMI_API_KEY
+./scripts/start.sh -p glm
+
+# Terminal 2: launch Codex Desktop with injection
+export OPENAI_BASE_URL=http://localhost:18765/v1   # see note below
+./scripts/codex-app.sh
+```
+
+> **Base-URL note.** CodexPlusPlus does **not** wire Codex Desktop App's OpenAI endpoint to this proxy. Whether `OPENAI_BASE_URL` / `OPENAI_API_BASE` are honored depends on the Codex Desktop App build; otherwise configure the custom base URL inside Codex App's own settings. If neither works on your build, the integration still gives you the Plugins UI unlock and session-delete — Desktop App's LLM traffic just won't flow through the proxy.
+
+> **License note.** CodexPlusPlus upstream has no LICENSE file. This repo references it as a submodule pointer only (never redistributing its source). All use is under upstream's terms; see `vendor/CodexPlusPlus/README.md` and the upstream link above.
+
+> **Platform note.** Upstream supports macOS and Windows only; Linux is not supported.
 
 ## 🖥️ Computer Use & Browser Support
 
@@ -176,27 +230,23 @@ This proxy supports Codex CLI's **Computer Use** and **Browser** plugins by tran
 
 ### GLM Backend
 
-| OpenAI Model | GLM Model | Notes |
-|--------------|-----------|-------|
-| `gpt-4` | `glm-4` | Standard GPT-4 |
-| `gpt-4-turbo` | `glm-4` | GPT-4 Turbo |
-| `gpt-4o` | `glm-5` | **Recommended** for best coding |
-| `gpt-4o-mini` | `glm-4-flash` | Faster, cheaper |
-| `gpt-3.5-turbo` | `glm-4-flash` | Legacy support |
-| `gpt-5.x-codex` | `glm-5` | Future Codex models |
+| OpenAI / Codex Model | GLM Model | Notes |
+|----------------------|-----------|-------|
+| `gpt-5.4` / `gpt-5.5` / `gpt-5.4-mini` | `glm-5.1` | **Recommended** — Codex Desktop App default family |
+| `gpt-5.3-codex` / `gpt-5.2` / `gpt-5.2-codex` | `glm-5.1` | Older Codex model variants |
+| `gpt-4o` | `glm-5.1` | Good default for Codex CLI |
+| `gpt-4` / `gpt-4-turbo` | `glm-4` | Legacy GPT-4 family |
+| `gpt-4o-mini` / `gpt-3.5-turbo` | `glm-4-flash` | Faster, cheaper |
 
 ### Kimi Backend
 
-| OpenAI Model | Kimi Model | Notes |
-|--------------|------------|-------|
-| `gpt-4` | `kimi-for-coding` | |
-| `gpt-4-turbo` | `kimi-for-coding` | |
-| `gpt-4o` | `kimi-for-coding` | **Recommended** |
-| `gpt-4o-mini` | `kimi-for-coding` | |
-| `gpt-3.5-turbo` | `kimi-for-coding` | Legacy support |
-| `gpt-5.x-codex` | `kimi-for-coding` | Future Codex models |
+| OpenAI / Codex Model | Kimi Model | Notes |
+|----------------------|------------|-------|
+| `gpt-5.4` / `gpt-5.5` / `gpt-5.4-mini` | `kimi-for-coding` | **Recommended** — Codex Desktop App default family |
+| `gpt-5.3-codex` / `gpt-5.2` / `gpt-5.2-codex` | `kimi-for-coding` | Older Codex model variants |
+| `gpt-4` / `gpt-4-turbo` / `gpt-4o` / `gpt-4o-mini` / `gpt-3.5-turbo` | `kimi-for-coding` | All map to the same coding model |
 
-**Recommendation:** Use `model = "gpt-4o"` in your Codex config for best results.
+**Recommendation:** Use `model = "gpt-5.4"` in your Codex config — it matches what Codex Desktop App selects by default and what `codex-app-transfer`'s built-in model catalog routes through.
 
 ## 🔧 Management
 

@@ -1,0 +1,3 @@
+[submodule "vendor/CodexPlusPlus"]
+	path = vendor/CodexPlusPlus
+	url = https://github.com/BigPizzaV3/CodexPlusPlus.git
