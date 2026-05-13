@@ -590,7 +590,7 @@ def convert_chat_to_responses(response_body: dict, is_stream: bool, original_too
         "created": response_body.get("created", 0),
         "model": response_body.get("model", ""),
         "output": outputs,
-        "usage": response_body.get("usage", {}),
+        "usage": _convert_usage_format(response_body.get("usage", {})),
         "status": "completed",
     }
 
@@ -645,6 +645,31 @@ def _extract_event_type(sse_bytes: bytes) -> str:
     if sse_bytes.startswith(b":"):
         return "comment"
     return "unknown"
+
+
+def _convert_usage_format(usage: dict) -> dict:
+    """Convert Chat Completions usage format to Responses API format.
+
+    Chat Completions uses: prompt_tokens / completion_tokens / prompt_tokens_details
+    Responses API uses:    input_tokens / output_tokens / input_tokens_details
+    """
+    if not usage:
+        return {}
+    converted = {}
+    # Map field names
+    if "prompt_tokens" in usage:
+        converted["input_tokens"] = usage["prompt_tokens"]
+    if "completion_tokens" in usage:
+        converted["output_tokens"] = usage["completion_tokens"]
+    if "total_tokens" in usage:
+        converted["total_tokens"] = usage["total_tokens"]
+    if "prompt_tokens_details" in usage:
+        converted["input_tokens_details"] = usage["prompt_tokens_details"]
+    # Preserve any other fields (e.g. reasoning_tokens, cached_tokens)
+    for key, val in usage.items():
+        if key not in ("prompt_tokens", "completion_tokens", "total_tokens", "prompt_tokens_details"):
+            converted[key] = val
+    return converted
 
 
 def _message_summary(messages: list) -> str:
@@ -813,6 +838,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         self.tool_calls = {}  # Track tool calls by index
         self.current_tool_index = 0
         self._done_events_sent = False  # Track if finish events were already sent
+        self.usage = None  # Track usage from upstream chunks for response.completed
         
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
@@ -1001,17 +1027,20 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 outputs.append(fc_out)
 
             if self.response_id:
+                response_payload = {
+                    "id": self.response_id,
+                    "object": "response",
+                    "created_at": self.created_at or 0,
+                    "model": self.model or "",
+                    "output": outputs,
+                    "status": "completed"
+                }
+                if self.usage:
+                    response_payload["usage"] = self.usage
                 completed_event = {
                     "type": "response.completed",
                     "sequence_number": self.sequence_number,
-                    "response": {
-                        "id": self.response_id,
-                        "object": "response",
-                        "created_at": self.created_at or 0,
-                        "model": self.model or "",
-                        "output": outputs,
-                        "status": "completed"
-                    }
+                    "response": response_payload
                 }
                 self.sequence_number += 1
                 results.append(f"event: response.completed\ndata: {json.dumps(completed_event)}\n\n".encode())
@@ -1021,7 +1050,11 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
         try:
             chunk = json.loads(data)
-            
+
+            # Collect usage from upstream chunks (last chunk typically carries it)
+            if "usage" in chunk and chunk["usage"]:
+                self.usage = _convert_usage_format(chunk["usage"])
+
             # Store response metadata from first chunk
             if not self.item_id:
                 self.response_id = chunk.get("id", "")
