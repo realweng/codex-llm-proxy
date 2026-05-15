@@ -43,6 +43,15 @@ PROVIDER_NAME = "codex-llm-proxy"
 
 
 def codex_app_transfer_running() -> bool:
+    if sys.platform == "win32":
+        try:
+            result = subprocess.run(
+                ["tasklist", "/FI", "IMAGENAME eq Codex App Transfer.exe", "/FO", "CSV", "/NH"],
+                capture_output=True, text=True, timeout=3,
+            )
+            return "Codex App Transfer" in result.stdout
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return False
     try:
         result = subprocess.run(
             ["pgrep", "-f", "Codex App Transfer"],

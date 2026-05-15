@@ -63,6 +63,8 @@ flowchart TD
    ```
 
 2. **Set your API key**
+
+   **macOS / Linux:**
    ```bash
    # For GLM
    export GLM_API_KEY="your_glm_api_key_here"
@@ -71,13 +73,33 @@ flowchart TD
    export KIMI_API_KEY="your_kimi_api_key_here"
    ```
 
+   **Windows (CMD):**
+   ```cmd
+   # For GLM
+   set GLM_API_KEY=your_glm_api_key_here
+
+   # For Kimi
+   set KIMI_API_KEY=your_kimi_api_key_here
+   ```
+
 3. **Start the proxy**
+
+   **macOS / Linux:**
    ```bash
    # Use GLM backend (default)
    ./scripts/start.sh
 
    # Use Kimi backend
    ./scripts/start.sh -p kimi
+   ```
+
+   **Windows:**
+   ```cmd
+   # Use GLM backend (default)
+   scripts\start.bat
+
+   # Use Kimi backend
+   scripts\start.bat -p kimi
    ```
 
    Proxy will run on `http://localhost:18765`
@@ -128,8 +150,14 @@ flowchart TD
 
 If `Codex App Transfer.app` is detected running, the rewrite is automatically **skipped** to avoid conflict (you'll see a warning on stderr); the proxy itself still starts. To manually restore at any time:
 
+**macOS / Linux:**
 ```bash
 python3 scripts/codex_config.py restore
+```
+
+**Windows:**
+```cmd
+python scripts\codex_config.py restore
 ```
 
 ## 🖱️ Codex Desktop App enhancement (optional)
@@ -217,6 +245,7 @@ This proxy supports Codex CLI's **Computer Use** and **Browser** plugins by tran
 
 ### Script Usage
 
+**macOS / Linux:**
 ```bash
 ./scripts/start.sh [-p <glm|kimi>]
 
@@ -224,6 +253,16 @@ This proxy supports Codex CLI's **Computer Use** and **Browser** plugins by tran
 ./scripts/start.sh              # Default: GLM backend
 ./scripts/start.sh -p glm       # Use GLM backend
 ./scripts/start.sh -p kimi      # Use Kimi backend
+```
+
+**Windows:**
+```cmd
+scripts\start.bat [-p <glm|kimi>]
+
+# Examples:
+scripts\start.bat              # Default: GLM backend
+scripts\start.bat -p glm       # Use GLM backend
+scripts\start.bat -p kimi      # Use Kimi backend
 ```
 
 ## 🗺️ Model Mapping
@@ -250,6 +289,7 @@ This proxy supports Codex CLI's **Computer Use** and **Browser** plugins by tran
 
 ## 🔧 Management
 
+**macOS / Linux:**
 ```bash
 # Start proxy with GLM backend
 ./scripts/start.sh -p glm
@@ -265,6 +305,24 @@ tail -f /tmp/codex-llm-proxy.log
 
 # Stop proxy
 ./scripts/stop.sh
+```
+
+**Windows:**
+```cmd
+# Start proxy with GLM backend
+scripts\start.bat -p glm
+
+# Start proxy with Kimi backend
+scripts\start.bat -p kimi
+
+# Check if running
+curl http://localhost:18765/health
+
+# View logs
+type %TEMP%\codex-llm-proxy.log
+
+# Stop proxy
+scripts\stop.bat
 ```
 
 ## 📝 Example Usage
@@ -292,7 +350,7 @@ codex exec "Create a calculator module with unit tests" --full-auto
 
 ### 502 Bad Gateway
 **Cause:** Proxy crashed
-**Solution:** Check logs at `/tmp/codex-llm-proxy.log` and restart
+**Solution:** Check logs at `/tmp/codex-llm-proxy.log` (macOS/Linux) or `%TEMP%\codex-llm-proxy.log` (Windows) and restart
 
 ### Connection refused
 **Cause:** Proxy not running

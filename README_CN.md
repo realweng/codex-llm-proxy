@@ -63,6 +63,8 @@ flowchart TD
    ```
 
 2. **设置 API 密钥**
+
+   **macOS / Linux:**
    ```bash
    # GLM
    export GLM_API_KEY="你的_GLM_API_密钥"
@@ -71,13 +73,33 @@ flowchart TD
    export KIMI_API_KEY="你的_Kimi_API_密钥"
    ```
 
+   **Windows (CMD):**
+   ```cmd
+   # GLM
+   set GLM_API_KEY=你的_GLM_API_密钥
+
+   # Kimi
+   set KIMI_API_KEY=你的_Kimi_API_密钥
+   ```
+
 3. **启动代理**
+
+   **macOS / Linux:**
    ```bash
    # 使用 GLM 后端（默认）
    ./scripts/start.sh
 
    # 使用 Kimi 后端
    ./scripts/start.sh -p kimi
+   ```
+
+   **Windows:**
+   ```cmd
+   # 使用 GLM 后端（默认）
+   scripts\start.bat
+
+   # 使用 Kimi 后端
+   scripts\start.bat -p kimi
    ```
 
    代理将运行在 `http://localhost:18765`
@@ -128,8 +150,14 @@ flowchart TD
 
 如果检测到 `Codex App Transfer.app` 已经在运行，会**自动跳过**改写避免冲突（stderr 给警告），代理本身仍然会起来。需要手动还原时：
 
+**macOS / Linux:**
 ```bash
 python3 scripts/codex_config.py restore
+```
+
+**Windows:**
+```cmd
+python scripts\codex_config.py restore
 ```
 
 ## 🖱️ Codex 桌面应用增强（可选）
@@ -217,6 +245,7 @@ export OPENAI_BASE_URL=http://localhost:18765/v1   # 见下方说明
 
 ### 启动脚本用法
 
+**macOS / Linux:**
 ```bash
 ./scripts/start.sh [-p <glm|kimi>]
 
@@ -224,6 +253,16 @@ export OPENAI_BASE_URL=http://localhost:18765/v1   # 见下方说明
 ./scripts/start.sh              # 默认使用 GLM 后端
 ./scripts/start.sh -p glm       # 使用 GLM 后端
 ./scripts/start.sh -p kimi      # 使用 Kimi 后端
+```
+
+**Windows:**
+```cmd
+scripts\start.bat [-p <glm|kimi>]
+
+# 示例：
+scripts\start.bat              # 默认使用 GLM 后端
+scripts\start.bat -p glm       # 使用 GLM 后端
+scripts\start.bat -p kimi      # 使用 Kimi 后端
 ```
 
 ## 🗺️ 模型映射
@@ -250,6 +289,7 @@ export OPENAI_BASE_URL=http://localhost:18765/v1   # 见下方说明
 
 ## 🔧 管理命令
 
+**macOS / Linux:**
 ```bash
 # 使用 GLM 后端启动
 ./scripts/start.sh -p glm
@@ -265,6 +305,24 @@ tail -f /tmp/codex-llm-proxy.log
 
 # 停止代理
 ./scripts/stop.sh
+```
+
+**Windows:**
+```cmd
+# 使用 GLM 后端启动
+scripts\start.bat -p glm
+
+# 使用 Kimi 后端启动
+scripts\start.bat -p kimi
+
+# 检查是否运行
+curl http://localhost:18765/health
+
+# 查看日志
+type %TEMP%\codex-llm-proxy.log
+
+# 停止代理
+scripts\stop.bat
 ```
 
 ## 📝 使用示例
@@ -292,7 +350,7 @@ codex exec "创建一个计算器模块并编写单元测试" --full-auto
 
 ### 502 Bad Gateway
 **原因：** 代理崩溃
-**解决：** 检查日志 `/tmp/codex-llm-proxy.log` 并重启
+**解决：** 检查日志 `/tmp/codex-llm-proxy.log`（macOS/Linux）或 `%TEMP%\codex-llm-proxy.log`（Windows）并重启
 
 ### Connection refused
 **原因：** 代理未运行
